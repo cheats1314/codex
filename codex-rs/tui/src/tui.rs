@@ -12,6 +12,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
@@ -66,13 +68,15 @@ fn keyboard_enhancement_disabled() -> bool {
     let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
     let is_wsl = running_in_wsl();
     let is_vscode_terminal = is_wsl && running_in_vscode_terminal();
-    keyboard_enhancement_disabled_for(disable_env.as_deref(), is_wsl, is_vscode_terminal)
+    let is_kitty = terminal_info().name == TerminalName::Kitty;
+    keyboard_enhancement_disabled_for(disable_env.as_deref(), is_wsl, is_vscode_terminal, is_kitty)
 }
 
 fn keyboard_enhancement_disabled_for(
     disable_env: Option<&str>,
     is_wsl: bool,
     is_vscode_terminal: bool,
+    is_kitty: bool,
 ) -> bool {
     if let Some(disabled) = parse_bool_env(disable_env) {
         return disabled;
@@ -81,7 +85,7 @@ fn keyboard_enhancement_disabled_for(
     // VS Code running a WSL shell can hide TERM_PROGRAM from the Linux process
     // environment, so `running_in_vscode_terminal` also probes the Windows-side
     // environment through WSL interop.
-    is_wsl && is_vscode_terminal
+    (is_wsl && is_vscode_terminal) || is_kitty
 }
 
 fn parse_bool_env(value: Option<&str>) -> Option<bool> {
@@ -219,17 +223,28 @@ mod tests {
     #[test]
     fn keyboard_enhancement_auto_disables_for_vscode_in_wsl() {
         assert!(keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true
+            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true,
+            /*is_kitty*/ false,
         ));
     }
 
     #[test]
     fn keyboard_enhancement_auto_disable_requires_wsl_and_vscode() {
         assert!(!keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false
+            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false,
+            /*is_kitty*/ false,
         ));
         assert!(!keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true
+            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true,
+            /*is_kitty*/ false,
+        ));
+    }
+
+    #[test]
+    fn keyboard_enhancement_auto_disables_for_kitty() {
+        assert!(keyboard_enhancement_disabled_for(
+            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ false,
+            /*is_kitty*/ true,
         ));
     }
 
@@ -238,12 +253,14 @@ mod tests {
         assert!(!keyboard_enhancement_disabled_for(
             Some("0"),
             /*is_wsl*/ true,
-            /*is_vscode_terminal*/ true
+            /*is_vscode_terminal*/ true,
+            /*is_kitty*/ true,
         ));
         assert!(keyboard_enhancement_disabled_for(
             Some("1"),
             /*is_wsl*/ false,
-            /*is_vscode_terminal*/ false
+            /*is_vscode_terminal*/ false,
+            /*is_kitty*/ false,
         ));
     }
 

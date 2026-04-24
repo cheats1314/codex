@@ -26,6 +26,7 @@ use std::task::Context;
 use std::task::Poll;
 
 use crossterm::event::Event;
+use crossterm::event::KeyEventKind;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_stream::Stream;
@@ -237,6 +238,10 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
+                if key_event.kind == KeyEventKind::Release {
+                    return None;
+                }
+
                 #[cfg(unix)]
                 if crate::tui::job_control::SUSPEND_KEY.is_press(key_event) {
                     let _ = self.suspend_context.suspend(&self.alt_screen_active);
@@ -296,6 +301,7 @@ mod tests {
     use crossterm::event::Event;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
+    use crossterm::event::KeyEventKind;
     use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use std::task::Context;
@@ -404,6 +410,52 @@ mod tests {
             TuiEvent::Key(key) => {
                 assert_eq!(key, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
             }
+            other => panic!("expected key event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn key_release_events_are_ignored() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        let press =
+            KeyEvent::new_with_kind(KeyCode::Backspace, KeyModifiers::NONE, KeyEventKind::Press);
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        let following_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(press)));
+        handle.send(Ok(Event::Key(release)));
+        handle.send(Ok(Event::Key(following_key)));
+
+        let first = stream.next().await.unwrap();
+        let second = stream.next().await.unwrap();
+
+        match first {
+            TuiEvent::Key(key) => assert_eq!(key, press),
+            other => panic!("expected key event, got {other:?}"),
+        }
+        match second {
+            TuiEvent::Key(key) => assert_eq!(key, following_key),
+            other => panic!("expected key event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn key_repeat_events_are_preserved() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        let repeat =
+            KeyEvent::new_with_kind(KeyCode::Backspace, KeyModifiers::NONE, KeyEventKind::Repeat);
+        handle.send(Ok(Event::Key(repeat)));
+
+        let next = stream.next().await.unwrap();
+        match next {
+            TuiEvent::Key(key) => assert_eq!(key, repeat),
             other => panic!("expected key event, got {other:?}"),
         }
     }
